@@ -1,0 +1,18 @@
+# MAXFIY — tokenlar hech qachon GitHub'ga chiqmasligi kerak!
+.env
+
+# Foydalanuvchi ma'lumotlari (suhbat tarixi, so'zlar, statistika)
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

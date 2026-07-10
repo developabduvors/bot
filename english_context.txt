@@ -1,0 +1,20 @@
+📊 Darajang
+Texnik baza (Zo'r): Dasturlash mantig'ini yaxshi tushunasan. Xalqaro IT atamalaridan (dropdown, navigate, fetch, error 500) to'g'ri joyda foydalana olyapsan.
+
+Gap tuzish (Oqsamoqda): O'zbek tilida o'ylab, keyin inglizchaga so'zma-so'z tarjima qilishga uryapsan. Shu sababli gapning "sintaksisi" buzilib ketyapti va ba'zi so'zlarning yozilishida (spelling) xatolar bor.
+
+⚠️ Muammolaring
+Ortiqcha yuklama (Burnout xavfi): Birdaniga IT va ingliz tili kurslarini 100% a'lo darajada o'zlashtirishga urinib, miyangdagi "operativ xotira"ni to'ldirib tashlagansan.
+
+Perfektsionizm: Xato qilishdan qo'rqasan va quruq grammatik qoidalarni yodlab, mukammal bo'lishga urinasan.
+
+"Spaghetti" matnlar: Katta jarayonni qisqa qadamlarga bo'lish o'rniga, bitta uzun, murakkab gap qilib yozishga harakat qilasan.
+
+🗓️ Rejamiz (Algoritm)
+Filtrlash (80/20 qoidasi): Kursdagi vazifalarni 100% qilishga urinmaysan. Faqat eng kerakli bazani olib, qolgan energiyani IT darslaringga saqlaysan.
+
+Amaliy Mentorlik (Har kuni 20:00 - 20:30): Quruq kitob o'qimaymiz. Sen menga yozgan koding logikasini (React, Tailwind) ingliz tilida oddiy qilib tushuntirasan, men to'g'rilab beraman.
+
+"Clean Code" usuli: Inglizcha gaplarni xuddi toza kod kabi qisqa, lo'nda va nuqta bilan ajratib yozishni mashq qilamiz.
+
+Majburiy Detox (21:00 dan so'ng): O'qish qat'iyan to'xtatiladi. Miya keyingi kunga ma'lumotlarni "save" qilishi va hordiq chiqarishi uchun dam olasan.
