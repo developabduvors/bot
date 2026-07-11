@@ -8,6 +8,8 @@ Qo'shimcha:
   🎤 Ovozli xabar   — bot eshitib javob beradi (gapirish mashqi)
   🖼 Rasm           — skrinshot/xato rasmini tahlil qiladi
   ⏰ Kunlik dars    — har kuni 20:00 (Toshkent) da bot o'zi dars boshlaydi
+  💰 Xarajatlar     — "25000 taksi" deb yozsang saqlaydi, oy oxirida tahlil
+  🔗 Havola         — link tashlasang (YouTube/maqola) xulosa qilib beradi
   ✨ Formatlash     — kod bloklari Telegram'da chiroyli chiqadi
 """
 import datetime
@@ -88,6 +90,18 @@ FILE_REVIEW_PROMPT = """Bu kod faylimni review qil:
 2. Clean code bo'yicha nimani yaxshilash mumkin?
 3. Qisqa xulosa: nima yaxshi, nima ustida ishlash kerak."""
 
+SUMMARY_SYSTEM = """Sen kontent xulosachisisan. Foydalanuvchi o'zbek, unga havoladagi
+kontentni (video, maqola, sahifa) tahlil qilib berasan. Agar foydalanuvchi aniq savol
+bergan bo'lsa — shunga javob ber. Bo'lmasa: asosiy g'oyalarni 5-7 punktda, o'zbek tilida,
+Telegram uchun qisqa qilib yoz. Muhim atamalarni **qalin** qil."""
+
+EXPENSE_ANALYSIS_PROMPT = """Sen moliyaviy maslahatchi bo'lib, quyidagi xarajatlar
+ro'yxatini tahlil qil (summalar so'mda):
+1. Kategoriyalarga ajrat (transport, ovqat, ...) va har birining jamini chiqar.
+2. Eng ko'p pul ketgan 3 yo'nalishni ayt.
+3. Tejash bo'yicha 2-3 ta aniq, amaliy maslahat ber.
+Qisqa, o'zbek tilida, Telegram uchun formatlangan javob ber."""
+
 
 # ---------- ma'lumotlarni saqlash ----------
 
@@ -109,6 +123,7 @@ def get_user(data: dict, user_id: int) -> dict:
     data[key].setdefault("memory", {"english": "", "code": ""})
     data[key].setdefault("words", [])
     data[key].setdefault("stats", {"days": {}, "tasks": 0})
+    data[key].setdefault("expenses", [])
     return data[key]
 
 
@@ -126,6 +141,38 @@ def calc_streak(days: dict) -> int:
         streak += 1
         d -= datetime.timedelta(days=1)
     return streak
+
+
+# ---------- xarajatlar ----------
+
+# "25000 taksi" — summa + tavsif (tavsif raqamdan boshlanmasin)
+EXPENSE_RE = re.compile(r"^(\d[\d\s]*)\s+([^\d\s].{0,30})$")
+URL_RE = re.compile(r"https?://\S+")
+YOUTUBE_RE = re.compile(r"(youtube\.com|youtu\.be)/")
+
+
+def parse_expense(text: str) -> tuple[int, str] | None:
+    """"25000 taksi" ko'rinishidagi xabarni (summa, tavsif) ga ajratadi."""
+    if len(text) > 40:
+        return None
+    m = EXPENSE_RE.match(text)
+    if not m:
+        return None
+    amount = int(m.group(1).replace(" ", ""))
+    if amount < 100:  # 100 so'mdan kichik xarajat bo'lmaydi — "3 kunlik reja" kabi savollar o'tib ketadi
+        return None
+    return amount, m.group(2).strip()
+
+
+def month_expenses(user: dict, month: str) -> list[dict]:
+    """Berilgan oy ("2026-07") xarajatlari."""
+    return [e for e in user["expenses"] if e["date"].startswith(month)]
+
+
+def expenses_text(expenses: list[dict]) -> str:
+    lines = [f"{e['date'][8:]}: {e['sum']:,} so'm — {e['what']}" for e in expenses]
+    total = sum(e["sum"] for e in expenses)
+    return "\n".join(lines) + f"\n\nJami: {total:,} so'm"
 
 
 def english_context() -> str:
@@ -154,8 +201,8 @@ def history_to_contents(history: list[dict]) -> list:
     ]
 
 
-def generate(contents: list, system: str, model: str = "gemini-2.5-flash") -> str:
-    config = genai_types.GenerateContentConfig(system_instruction=system)
+def generate(contents: list, system: str, model: str = "gemini-2.5-flash", tools: list | None = None) -> str:
+    config = genai_types.GenerateContentConfig(system_instruction=system, tools=tools)
     # 503 (server band) bo'lsa: kutib qayta urinadi, keyin zaxira modelga o'tadi
     attempts = [model, model, model, "gemini-2.5-flash-lite"]
     last_error = None
@@ -298,6 +345,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "🖼 Rasm yubor — skrinshot/xatoni tahlil qilaman\n"
         "📎 Kod faylini tashla — review qilaman\n"
         "🎯 /vazifa — darajangga mos kod topshirig'i\n"
+        "💰 «25000 taksi» deb yoz — xarajatingni saqlayman (/xarajat, /hisobot)\n"
+        "🔗 Link tashla (YouTube/maqola) — xulosa qilib beraman\n"
         "⏰ Har kuni 20:00 da o'zim dars boshlayman\n\n"
         "Rejimni tanla va yozaver 👇",
         reply_markup=KEYBOARD,
@@ -329,6 +378,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         user[user["mode"]] = []
         save_data(data)
         await update.message.reply_text("Joriy rejim suhbati tozalandi ✅", reply_markup=KEYBOARD)
+        return
+
+    # "25000 taksi" — xarajat sifatida saqlanadi, AI'ga bormaydi
+    parsed = parse_expense(text)
+    if parsed is not None:
+        await add_expense(update, *parsed)
+        return
+
+    # havola bo'lsa — xulosa rejimi (suhbat tarixiga yozilmaydi)
+    url_match = URL_RE.search(text)
+    if url_match:
+        await handle_link(update, text, url_match.group(0))
         return
 
     await process_request(update, text)
@@ -489,6 +550,134 @@ async def cmd_statistika(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=KEYBOARD)
 
 
+# ---------- xarajatlar handlerlari ----------
+
+async def add_expense(update: Update, amount: int, what: str) -> None:
+    data = load_data()
+    user = get_user(data, update.effective_user.id)
+    user["expenses"].append({"sum": amount, "what": what, "date": today_str()})
+    save_data(data)
+    total = sum(e["sum"] for e in month_expenses(user, today_str()[:7]))
+    await update.message.reply_text(
+        f"✅ {amount:,} so'm — {what}\n📅 Bu oy jami: {total:,} so'm",
+        reply_markup=KEYBOARD,
+    )
+
+
+async def cmd_xarajat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Xarajat qo'shish yoki shu oy ro'yxati: /xarajat 25000 taksi | /xarajat"""
+    if not allowed(update):
+        return
+    args = " ".join(context.args) if context.args else ""
+
+    if args:
+        parsed = parse_expense(args)
+        if parsed is None:
+            await update.message.reply_text(
+                "Format: /xarajat 25000 taksi\nYoki shunchaki yozaver: 25000 taksi"
+            )
+            return
+        await add_expense(update, *parsed)
+        return
+
+    data = load_data()
+    user = get_user(data, update.effective_user.id)
+    expenses = month_expenses(user, today_str()[:7])
+    if not expenses:
+        await update.message.reply_text(
+            "Bu oy xarajat yozilmagan. Qo'shish: 25000 taksi", reply_markup=KEYBOARD
+        )
+        return
+    await send_answer(update, f"💰 Bu oy ({len(expenses)} ta):\n\n" + expenses_text(expenses))
+
+
+async def expense_report(user: dict, month: str) -> str | None:
+    """Gemini bilan oylik xarajat tahlili. Xarajat bo'lmasa None."""
+    expenses = month_expenses(user, month)
+    if not expenses:
+        return None
+    prompt = f"{EXPENSE_ANALYSIS_PROMPT}\n\n--- {month} XARAJATLARI ---\n{expenses_text(expenses)}"
+    contents = [genai_types.Content(role="user", parts=[genai_types.Part(text=prompt)])]
+    return generate(contents, "Sen moliyaviy maslahatchisisan.")
+
+
+async def cmd_hisobot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Oylik xarajat tahlili (Gemini): /hisobot"""
+    if not allowed(update):
+        return
+    data = load_data()
+    user = get_user(data, update.effective_user.id)
+    await update.message.chat.send_action("typing")
+    try:
+        report = await expense_report(user, today_str()[:7])
+    except Exception as e:
+        await update.message.reply_text(f"Xatolik: {e}")
+        return
+    if report is None:
+        await update.message.reply_text(
+            "Bu oy xarajat yozilmagan. Qo'shish: 25000 taksi", reply_markup=KEYBOARD
+        )
+        return
+    await send_answer(update, report)
+
+
+async def monthly_expense_report(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Har oyning 1-kuni 09:00 da o'tgan oy tahlilini yuboradi."""
+    if OWNER_ID == 0:
+        return
+    data = load_data()
+    user = get_user(data, OWNER_ID)
+    first_day = datetime.datetime.now(TASHKENT).date().replace(day=1)
+    last_month = (first_day - datetime.timedelta(days=1)).strftime("%Y-%m")
+    try:
+        report = await expense_report(user, last_month)
+    except Exception as e:
+        print(f"[oylik hisobot xatosi] {e}")
+        return
+    if report is None:
+        return
+    for chunk in split_chunks(f"💰 {last_month} oyi hisoboti:\n\n" + report):
+        try:
+            await context.bot.send_message(OWNER_ID, chunk, parse_mode="Markdown", reply_markup=KEYBOARD)
+        except BadRequest:
+            await context.bot.send_message(OWNER_ID, chunk, reply_markup=KEYBOARD)
+
+
+# ---------- havola xulosachisi ----------
+
+async def handle_link(update: Update, text: str, url: str) -> None:
+    """YouTube/maqola havolasini Gemini bilan xulosa qiladi (suhbat tarixiga yozilmaydi)."""
+    question = URL_RE.sub("", text).strip() or (
+        "Bu kontentni qisqa xulosa qilib ber: asosiy g'oyalar 5-7 punkt."
+    )
+    await update.message.chat.send_action("typing")
+    try:
+        if YOUTUBE_RE.search(url):
+            # Gemini YouTube videolarni to'g'ridan-to'g'ri ko'ra oladi
+            parts = [
+                genai_types.Part(file_data=genai_types.FileData(file_uri=url)),
+                genai_types.Part(text=question),
+            ]
+            contents = [genai_types.Content(role="user", parts=parts)]
+            answer = generate(contents, SUMMARY_SYSTEM)
+        else:
+            # url_context tool: API o'zi sahifani ochib o'qiydi
+            contents = [
+                genai_types.Content(
+                    role="user", parts=[genai_types.Part(text=f"{url}\n\n{question}")]
+                )
+            ]
+            answer = generate(
+                contents,
+                SUMMARY_SYSTEM,
+                tools=[genai_types.Tool(url_context=genai_types.UrlContext())],
+            )
+    except Exception as e:
+        await update.message.reply_text(f"Havolani o'qib bo'lmadi: {e}")
+        return
+    await send_answer(update, answer)
+
+
 # ---------- kunlik dars (20:00 Toshkent) ----------
 
 async def daily_lesson(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -551,6 +740,8 @@ async def setup_commands(app: Application) -> None:
         BotCommand("soz", "📝 So'z saqlash: /soz apple - olma"),
         BotCommand("test", "🧪 So'z daftaridan test olish"),
         BotCommand("statistika", "📊 Streak va o'qish statistikasi"),
+        BotCommand("xarajat", "💰 Xarajat: /xarajat 25000 taksi (yoki ro'yxat)"),
+        BotCommand("hisobot", "📈 Oylik xarajatlar tahlili (AI)"),
     ])
 
 
@@ -570,6 +761,8 @@ def main() -> None:
     app.add_handler(CommandHandler("soz", cmd_soz))
     app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(CommandHandler("statistika", cmd_statistika))
+    app.add_handler(CommandHandler("xarajat", cmd_xarajat))
+    app.add_handler(CommandHandler("hisobot", cmd_hisobot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
@@ -582,7 +775,13 @@ def main() -> None:
             time=datetime.time(hour=20, minute=0, tzinfo=TASHKENT),
             name="kunlik_dars",
         )
-        print("Kunlik dars rejalashtirildi: har kuni 20:00 (Toshkent)")
+        app.job_queue.run_monthly(
+            monthly_expense_report,
+            when=datetime.time(hour=9, minute=0, tzinfo=TASHKENT),
+            day=1,
+            name="oylik_hisobot",
+        )
+        print("Kunlik dars (20:00) va oylik hisobot (1-kuni 09:00) rejalashtirildi")
 
     print("Bot ishga tushdi... (to'xtatish: Ctrl+C)")
     app.run_polling(drop_pending_updates=True)
