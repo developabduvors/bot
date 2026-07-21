@@ -148,6 +148,7 @@ def calc_streak(days: dict) -> int:
 # "25000 taksi" — summa + tavsif (tavsif raqamdan boshlanmasin)
 EXPENSE_RE = re.compile(r"^(\d[\d\s]*)\s+([^\d\s].{0,30})$")
 BARE_EXPENSE_RE = re.compile(r"^(\d[\d\s]+)$")  # "15000" (tavsifsiz raqam)
+LIST_PREFIX_RE = re.compile(r"^\d+[\)\.\-]\s*")  # "1) " / "1. " / "1- " prefiksini olib tashlash
 URL_RE = re.compile(r"https?://\S+")
 YOUTUBE_RE = re.compile(r"(youtube\.com|youtu\.be)/")
 
@@ -174,6 +175,11 @@ def parse_expense(text: str) -> tuple[int, str] | None:
         return amount, "(nomalsum)"
 
     return None
+
+
+def is_ignorable_line(line: str) -> bool:
+    """Raqamsiz qatorlar — header/izoh, xarajat tahlilida skip qilinadi."""
+    return not any(c.isdigit() for c in line)
 
 
 def month_expenses(user: dict, month: str) -> list[dict]:
@@ -394,13 +400,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("Joriy rejim suhbati tozalandi ✅", reply_markup=KEYBOARD)
         return
 
-    # Xarajat tahlili: "25000 taksi", "15000" yoki ko'p qatorli "15000\n23000"
+    # Xarajat tahlili: "25000 taksi", "15000", "1) 25000\n2) 15000"
     lines = text.split('\n')
     expenses_found = []
     for line in lines:
         line = line.strip()
-        if not line:
-            continue
+        if not line or is_ignorable_line(line):
+            continue  # Bo'sh qator yoki "Xarajatlar:" header
+        # Raqamlangan ro'yxat prefiksini olib tashlash: "1) 25000" -> "25000"
+        m = LIST_PREFIX_RE.match(line)
+        if m:
+            line = line[m.end():]
         parsed = parse_expense(line)
         if parsed is not None:
             expenses_found.append(parsed)
