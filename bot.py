@@ -44,7 +44,7 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data")))
 DATA_FILE = DATA_DIR / "users.json"
 ENGLISH_CONTEXT_FILE = BASE_DIR / "english_context.txt"
 
-MAX_HISTORY = 40          # har rejimda oxirgi 40 ta xabar saqlanadi
+MAX_HISTORY = 25          # har rejimda oxirgi 25 ta xabar saqlanadi (tezlik uchun)
 TG_LIMIT = 4000           # Telegram 4096 belgi limiti, zaxira bilan
 TASHKENT = ZoneInfo("Asia/Tashkent")
 
@@ -147,21 +147,33 @@ def calc_streak(days: dict) -> int:
 
 # "25000 taksi" — summa + tavsif (tavsif raqamdan boshlanmasin)
 EXPENSE_RE = re.compile(r"^(\d[\d\s]*)\s+([^\d\s].{0,30})$")
+BARE_EXPENSE_RE = re.compile(r"^(\d[\d\s]+)$")  # "15000" (tavsifsiz raqam)
 URL_RE = re.compile(r"https?://\S+")
 YOUTUBE_RE = re.compile(r"(youtube\.com|youtu\.be)/")
 
 
 def parse_expense(text: str) -> tuple[int, str] | None:
-    """"25000 taksi" ko'rinishidagi xabarni (summa, tavsif) ga ajratadi."""
+    """"25000 taksi" yoki "15000" (tavsifsiz) ko'rinishidagi xabarni (summa, tavsif) ga ajratadi."""
     if len(text) > 40:
         return None
+
+    # "25000 taksi" — raqam + tavsif
     m = EXPENSE_RE.match(text)
-    if not m:
-        return None
-    amount = int(m.group(1).replace(" ", ""))
-    if amount < 100:  # 100 so'mdan kichik xarajat bo'lmaydi — "3 kunlik reja" kabi savollar o'tib ketadi
-        return None
-    return amount, m.group(2).strip()
+    if m:
+        amount = int(m.group(1).replace(" ", ""))
+        if amount < 100:  # 100 so'mdan kichik xarajat bo'lmaydi
+            return None
+        return amount, m.group(2).strip()
+
+    # "15000" — faqat raqam (tavsifsiz)
+    m = BARE_EXPENSE_RE.match(text.strip())
+    if m:
+        amount = int(m.group(1).replace(" ", ""))
+        if amount < 100:
+            return None
+        return amount, "(nomalsum)"
+
+    return None
 
 
 def month_expenses(user: dict, month: str) -> list[dict]:
@@ -320,12 +332,14 @@ async def process_request(update: Update, user_text: str, extra_part=None) -> No
 
     history.append({"role": "user", "text": user_text})
     history.append({"role": "model", "text": answer})
-    update_memory(user, mode)
     # statistika: bugungi faollik +1
     day = today_str()
     user["stats"]["days"][day] = user["stats"]["days"].get(day, 0) + 1
     save_data(data)
     await send_answer(update, answer)
+    # Xotirani yangilash — avval javob yuboriladi, keyin bajariladi (tezlik uchun)
+    update_memory(user, mode)
+    save_data(data)
 
 
 # ---------- handlerlar ----------
@@ -380,10 +394,33 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("Joriy rejim suhbati tozalandi ✅", reply_markup=KEYBOARD)
         return
 
-    # "25000 taksi" — xarajat sifatida saqlanadi, AI'ga bormaydi
-    parsed = parse_expense(text)
-    if parsed is not None:
-        await add_expense(update, *parsed)
+    # Xarajat tahlili: "25000 taksi", "15000" yoki ko'p qatorli "15000\n23000"
+    lines = text.split('\n')
+    expenses_found = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        parsed = parse_expense(line)
+        if parsed is not None:
+            expenses_found.append(parsed)
+        else:
+            expenses_found = []  # Agar birorta qator xarajat bo'lmasa — butun xabar oddiy matn
+            break
+
+    if expenses_found:
+        # data va user allaqachon yuklangan (yuqorida)
+        for amount, what in expenses_found:
+            user["expenses"].append({"sum": amount, "what": what, "date": today_str()})
+        save_data(data)
+        total = sum(e["sum"] for e in month_expenses(user, today_str()[:7]))
+        detail_lines = [f"{amount:,} so'm — {what}" for amount, what in expenses_found]
+        await update.message.reply_text(
+            f"✅ {len(expenses_found)} ta xarajat qo'shildi:\n" +
+            "\n".join(detail_lines) +
+            f"\n📅 Bu oy jami: {total:,} so'm",
+            reply_markup=KEYBOARD,
+        )
         return
 
     # havola bo'lsa — xulosa rejimi (suhbat tarixiga yozilmaydi)
