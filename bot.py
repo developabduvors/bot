@@ -43,6 +43,7 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data")))
 DATA_FILE = DATA_DIR / "users.json"
 ENGLISH_CONTEXT_FILE = BASE_DIR / "english_context.txt"
+TEST_CONTEXT_FILE = BASE_DIR / "test_context.txt"
 
 MAX_HISTORY = 25          # har rejimda oxirgi 25 ta xabar saqlanadi (tezlik uchun)
 TG_LIMIT = 4000           # Telegram 4096 belgi limiti, zaxira bilan
@@ -199,7 +200,22 @@ def english_context() -> str:
     return "(kontekst hali kiritilmagan)"
 
 
-def system_for(mode: str, memory: str = "") -> str:
+def test_context() -> str:
+    if TEST_CONTEXT_FILE.exists():
+        return TEST_CONTEXT_FILE.read_text(encoding="utf-8").strip()
+    return ""
+
+
+def system_for(mode: str, memory: str = "", test_system: str = "") -> str:
+    if test_system:
+        result = test_system
+        if memory:
+            result += (
+                "\n\n--- UZOQ MUDDATLI XOTIRA (oldingi suhbatlar xulosasi) ---\n"
+                + memory
+                + "\n--- XOTIRA TUGADI ---"
+            )
+        return result
     base = ENGLISH_SYSTEM.format(context=english_context()) if mode == "english" else CODE_SYSTEM
     if memory:
         base += (
@@ -331,7 +347,7 @@ async def process_request(update: Update, user_text: str, extra_part=None) -> No
 
     await update.message.chat.send_action("typing")
     try:
-        answer = generate(contents, system_for(mode, user["memory"].get(mode, "")))
+        answer = generate(contents, system_for(mode, user["memory"].get(mode, ""), user.get("test_system", "")))
     except Exception as e:
         await update.message.reply_text(f"Xatolik: {e}")
         return
@@ -382,6 +398,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if text == "🇬🇧 Ingliz tili":
         user["mode"] = "english"
+        user.pop("test_system", None)
         save_data(data)
         await update.message.reply_text(
             "🇬🇧 Ingliz tili rejimi. Yozaver yoki 🎤 ovoz yubor!", reply_markup=KEYBOARD
@@ -389,6 +406,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     if text == "💻 Code":
         user["mode"] = "code"
+        user.pop("test_system", None)
         save_data(data)
         await update.message.reply_text(
             "💻 Code rejimi. Savol yoz yoki 🖼 skrinshot tashla!", reply_markup=KEYBOARD
@@ -396,6 +414,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     if text == "🗑 Suhbatni tozalash":
         user[user["mode"]] = []
+        user.pop("test_system", None)
         save_data(data)
         await update.message.reply_text("Joriy rejim suhbati tozalandi ✅", reply_markup=KEYBOARD)
         return
@@ -540,34 +559,41 @@ async def cmd_soz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """So'z daftaridan test: /test"""
+    """Ingliz tili grammatika testi (test_context.txt): /test"""
     if not allowed(update):
         return
-    data = load_data()
-    user = get_user(data, update.effective_user.id)
-    words = user["words"]
-    if not words:
+
+    tc = test_context()
+    if not tc:
         await update.message.reply_text(
-            "Avval so'z qo'sh: /soz apple - olma", reply_markup=KEYBOARD
+            "❌ Test fayli (test_context.txt) topilmadi.", reply_markup=KEYBOARD
         )
         return
-    # eng kam test qilinganlarini tanlaymiz (spaced repetition)
-    picked = sorted(words, key=lambda w: w.get("last_tested", ""))[:5]
-    for w in picked:
-        w["last_tested"] = today_str()
+
+    data = load_data()
+    user = get_user(data, update.effective_user.id)
+
+    # Yangi test sessiyasi: tarix tozalanadi, test tizimi yoziladi
+    user["english"] = []
     user["mode"] = "english"
+    user["test_system"] = tc
     save_data(data)
 
-    word_list = "\n".join(f"- {w['w']} ({w['m']})" for w in picked)
-    prompt = (
-        "So'z daftarimdan quyidagi so'zlar bo'yicha test ol:\n"
-        f"{word_list}\n\n"
-        "Har bir so'z uchun bitta savol ber (tarjima so'ra yoki gap tuzdirib ko'r), "
-        "hammasini bitta xabarda raqamlab yubor. Men javob berganimda tekshirib, "
-        "har biriga baho qo'y va xatolarimni tushuntir. So'zlarning tarjimasini "
-        "savollarda ko'rsatma!"
-    )
-    await process_request(update, prompt)
+    await update.message.chat.send_action("typing")
+    contents = [
+        genai_types.Content(role="user", parts=[genai_types.Part(text="Testni boshla va birinchi savolni ber.")])
+    ]
+    try:
+        answer = generate(contents, tc)
+    except Exception as e:
+        await update.message.reply_text(f"Xatolik: {e}")
+        return
+
+    user["english"].append({"role": "user", "text": "(test boshlash)"})
+    user["english"].append({"role": "model", "text": answer})
+    save_data(data)
+
+    await send_answer(update, f"🧪 *Ingliz tili testi boshlandi!*\n\n{answer}")
 
 
 async def cmd_statistika(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -785,7 +811,7 @@ async def setup_commands(app: Application) -> None:
         BotCommand("vazifa", "🎯 Darajamga mos kod topshirig'i ber"),
         BotCommand("dars", "⏰ Kunlik ingliz tili darsini hozir boshla"),
         BotCommand("soz", "📝 So'z saqlash: /soz apple - olma"),
-        BotCommand("test", "🧪 So'z daftaridan test olish"),
+        BotCommand("test", "🧪 Ingliz tili grammatika testi"),
         BotCommand("statistika", "📊 Streak va o'qish statistikasi"),
         BotCommand("xarajat", "💰 Xarajat: /xarajat 25000 taksi (yoki ro'yxat)"),
         BotCommand("hisobot", "📈 Oylik xarajatlar tahlili (AI)"),
