@@ -52,7 +52,7 @@ TASHKENT = ZoneInfo("Asia/Tashkent")
 gemini = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 KEYBOARD = ReplyKeyboardMarkup(
-    [["🇬🇧 Ingliz tili", "💻 Code"], ["🗑 Suhbatni tozalash"]],
+    [["🇬🇧 Ingliz tili", "💻 Code"], ["🧪 Test", "🗑 Suhbatni tozalash"]],
     resize_keyboard=True,
 )
 
@@ -412,6 +412,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "💻 Code rejimi. Savol yoz yoki 🖼 skrinshot tashla!", reply_markup=KEYBOARD
         )
         return
+    if text == "🧪 Test":
+        await cmd_test(update, context)
+        return
+
     if text == "🗑 Suhbatni tozalash":
         user[user["mode"]] = []
         user.pop("test_system", None)
